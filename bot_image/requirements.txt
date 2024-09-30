@@ -1,0 +1,6 @@
+paramiko==3.4.0
+requests==2.32.3
+psycopg2-binary==2.9.9
+urllib3==2.2.2
+cryptography==36.0
+shutils==0.1.0
