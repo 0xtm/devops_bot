@@ -1,0 +1,123 @@
+- hosts: botimage
+  become: true
+  tasks:
+    - name: Устанавливаем gin env
+      apt:
+        pkg:
+        - git
+        - python3-virtualenv
+        state: present
+    - name: Клонируем репозиторий
+      git:
+        repo: "https://github.com/0xtm/devops_bot.git"
+        dest: "/home/ansible/devops_bot"
+        version: "docker"
+        update: yes
+    - name: Устанавливаем зависмости
+      pip:
+        requirements: "/home/ansible/devops_bot/bot_image/requirements.txt"
+        virtualenv: /home/ansible/venv
+        virtualenv_python: python3.11
+        state: present
+
+    - name: Запускаем бота
+      command: nohup /home/ansible/venv/bin/python3 /home/ansible/devops_bot/bot_image/bot_tg_pg.py &
+      args:
+        chdir: "/home/ansible/devops_bot/bot_image/"
+      async: 200000
+      poll: 0
+
+- hosts: dbimage
+  become: true
+  tasks:
+    - name: Устанавливаем PostgreSQL
+      apt:
+        pkg:
+        - postgresql
+        - postgresql-contrib
+        - python3-psycopg2
+        state: present
+      register: pg_instal
+    - name: Клонируем репозиторий
+      git:
+        repo: "https://github.com/0xtm/devops_bot.git"
+        dest: "/home/ansible/devops_bot"
+        version: "ansible"
+        update: yes
+    - name: Копируем конфиг postgresql.conf
+      copy:
+        src: "/home/ansible/devops_bot/config-postgresql"
+        dest: /etc/postgresql/15/main/postgresql.conf
+        owner: postgres
+        group: postgres
+        mode: '0644'
+    - name: Копируем конфиг pg_hba.conf
+      copy:
+        src: "/home/ansible/devops_bot/pg_hba.conf"
+        dest: /etc/postgresql/15/main/pg_hba.conf
+        owner: postgres
+        group: postgres
+        mode: '0644'
+    - name: Копируем схему
+      copy:
+        src: "/home/ansible/devops_bot/db_image/schema.sql"
+        dest: /tmp/schema.sql
+    - name: Перезапускаем PostgreSQL
+      service:
+       name: postgresql
+       state: restarted
+    - name: Перезапускаем systemd
+      command: systemctl daemon-reload       
+    - name: Создаем базу 
+      command: sudo -u postgres psql -c "CREATE DATABASE db_clients OWNER postgres;"
+    - name: Обновляем права на файл лога PG
+      file:
+        path: /var/log/postgresql/postgresql-15-main.log
+        mode: '0644'
+
+- hosts: dbreplimage
+  become: true
+  tasks:
+    - name: Устанавливаем PostgreSQL
+      apt:
+        pkg:
+        - postgresql
+        - postgresql-contrib
+        - python3-psycopg2
+        state: present
+      become_user: root
+    - name: Копируем конфиг postgresql.conf
+      copy:
+        src: "/home/ansible/devops_bot/config-postgresql"
+        dest: /etc/postgresql/15/main/postgresql.conf
+        owner: postgres
+        group: postgres
+        mode: '0644'
+    - name: Останавливаем PostgreSQL
+      service:
+        name: postgresql
+        state: stopped
+    - name: Очищаем каталог перед pg_basebackup
+      file:
+        path: /var/lib/postgresql/15/main/
+        state: absent
+    - name: Выполняем pg_basebackup
+      command: pg_basebackup -R -h 192.168.40.186 -U repl_user -D /var/lib/postgresql/15/main -P
+      environment:
+       PGPASSWORD: "P@ssw0rd"
+      register: pg_basebackup_result
+      failed_when: pg_basebackup_result.rc != 0
+      changed_when: False
+
+    - name: Обновляем права var/lib/postgresql/15/main/
+      file:
+        dest: /var/lib/postgresql/15/main
+        owner: postgres
+        group: postgres
+        mode: '0700'
+        recurse: yes
+
+    - name: Запускаем службы PostgreSQL
+      service:
+        name: postgresql
+        state: started
